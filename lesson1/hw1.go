@@ -1,13 +1,14 @@
 // Домашнее задание №1 к уроку Go лучшие практики
-// При отправке парсеру сигнала SIGUSR1 он должен увеличить глубину поиска на 2
+// При отправке парсеру сигнала SIGUSR1 он должен увеличить глубину поиска на 2 +
 // Добавить общий таймаут на работу парсера +
-// По SIGUSR1 вывести текущую директорию и текущую глубину поиска
-// Ограничить глубину поиска заданым числом, по SIGUSR2 увеличить глубину поиска на +2
+// По SIGUSR1 вывести текущую директорию и текущую глубину поиска +
+// Ограничить глубину поиска заданным числом
+// По SIGUSR2 увеличить глубину поиска на +2 +
 // Обработать сигнал SIGUSR1
 
 package main
 
-//Исходники задания для первого занятия у других групп https://github.com/t0pep0/GB_best_go - не работает((
+//Исходники задания для первого занятия у других групп https://github.com/t0pep0/GB_best_go1
 
 import (
 	"context"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -25,70 +27,106 @@ type TargetFile struct {
 	Name string
 }
 
-type FileList map[string]TargetFile
-
-type FileInfo interface {
-	os.FileInfo
-	Path() string
-}
+type FileList map[string]TargetFile // Можно убрать тип TargetFile и в FileList значение сделать string?
 
 type fileInfo struct {
-	os.FileInfo
-	path string
+	os.FileInfo // Зачем это? Чтобы потом можно было сделать Name: file.Name()? Зачем повтор в строке 43?
+	path        string
 }
 
+// Path принимает на вход структуру и возвращает одно ее поле в виде строки
 func (fi fileInfo) Path() string {
 	return fi.path
 }
 
-func ListDirectory(ctx context.Context, dir string) ([]FileInfo, error) {
-	// Ограничить глубину поиска заданым числом, по SIGUSR2 увеличить глубину поиска на +2
+type FileInfo interface {
+	os.FileInfo   // Зачем это? Чтобы потом можно было сделать Name: file.Name()?
+	Path() string // метод Path()
+}
+
+type SearchData struct { // Добавлен тип SearchData структура
+	sync.Mutex     //Чтобы безопасно писать из разных горутин?
+	depth          int
+	current        int
+	lastSignalType os.Signal
+	waitCh         *chan struct{}
+}
+
+// ListDirectory принимает на вход контекст, текущую директорию и структуру типа SearchData,
+// возвращает слайс файлов и ошибку
+func ListDirectory(ctx context.Context, dir string, data *SearchData) ([]FileInfo, error) { // К исходным параметрам добавлена структура data
+	// Ограничить глубину поиска заданным числом, по SIGUSR2 увеличить глубину поиска на +2
+	// fmt.Printf("ctx.Done %v\n", ctx.Done()) // Убрать после отладки !!!!!!!!!!!!!!!!!!!!!!!!! ctx.Done 0xc000118060
+	*data.waitCh <- struct{}{} // Зачем в канал структур (поле waitCh структуры) записали пустую структуру?
 	select {
-	case <-ctx.Done():
+	case <-ctx.Done(): // Если закрылся контекст
 		return nil, nil
 	default:
-		//По SIGUSR1 вывести текущую директорию и текущую глубину поиска
 		time.Sleep(time.Second * 10) // Добавить общий таймаут на работу парсера
-		var result []FileInfo
-		res, err := os.ReadDir(dir)
+		switch data.lastSignalType { // Проверка принятого системного сигнала
+		//По SIGUSR1 вывести текущую директорию и текущую глубину поиска
+		case syscall.SIGUSR1:
+			fmt.Printf("\nDirectory: %s, Depth: %d", dir, data.depth)
+		case syscall.SIGUSR2:
+			// По SIGUSR2 увеличить глубину поиска на +2 +
+			data.Lock()
+			data.depth += 2
+			data.Unlock()
+		}
+		var result []FileInfo       // Объявили слайс интерфейсов
+		res, err := os.ReadDir(dir) // ReadDir читает именованный каталог, возвращая все его записи каталога,
+		// отсортированные по имени файла. Если при чтении каталога возникает ошибка,
+		// ReadDir возвращает записи, которые он смог прочитать до возникновения ошибки, вместе с самой ошибкой.
 		if err != nil {
 			return nil, err
 		}
 		for _, entry := range res {
-			path := filepath.Join(dir, entry.Name())
-			if entry.IsDir() {
-				child, err := ListDirectory(ctx, path) //Дополнительно: вынести в горутину
-				if err != nil {
-					return nil, err
+			data.current = 0                         // Текущая глубина поиска = 0?
+			path := filepath.Join(dir, entry.Name()) // Формируем вложенные пути: прибавляем к пути
+			// и вложенные директории и файлы
+			if entry.IsDir() { // Если это директория
+				fmt.Println(data.current, data.depth, path)
+				if data.current < data.depth { // И если мы не провалились глубже заданной глубины
+					data.current++
+					child, err := ListDirectory(ctx, path, data) //Рекурсия. Дополнительно: вынести в горутину
+					if err != nil {
+						return nil, err
+					}
+					result = append(result, child...) // Заполняем файлами слайс, которые возвращает ListDirectory
 				}
-				result = append(result, child...)
 			} else {
-				info, err := entry.Info()
+				info, err := entry.Info() // значит это файл и в info записываем информацию об entry
 				if err != nil {
 					return nil, err
 				}
 				result = append(result, fileInfo{info, path})
+				// Не понятно, что такое os.FileInfo, которое здесь стало info
 			}
 		}
 		return result, nil
 	}
 }
 
-func FindFiles(ctx context.Context, ext string) (FileList, error) {
-	wd, err := os.Getwd()
+// FindFiles функция принимает на вход контекст, расширение файла (*.go) и структуру,
+// возвращает карту: ключ - имя файла *.go, значение - структура (2 поля: имя файла и его абсолютный путь) и ошибку
+func FindFiles(ctx context.Context, ext string, data *SearchData) (FileList, error) {
+	wd, err := os.Getwd() // Метод Getwd возвращает корневой путь, соответствующий текущему каталогу
 	if err != nil {
 		return nil, err
 	}
-	files, err := ListDirectory(ctx, wd)
+	files, err := ListDirectory(ctx, wd, data) // Рекурсивный поиск всех файлов в исходной директории и глубже,
+	// глубина определяется полем data.depth
+	//fmt.Printf("Type of files: %T\t, value files: %v\n", files, files) // Убрать после отладки !!!!!!!!!!!!!!!!!!!!!!!!!
 	if err != nil {
 		return nil, err
 	}
-	fl := make(FileList, len(files))
+	fl := make(FileList, len(files)) // Создание карты с длиной в количество обнаруженных файлов: ключ: строка,
+	// значение: структура и двух полей (имя и путь)
 	for _, file := range files {
-		if filepath.Ext(file.Name()) == ext {
-			fl[file.Name()] = TargetFile{
-				Name: file.Name(),
-				Path: file.Path(),
+		if filepath.Ext(file.Name()) == ext { // Выражение слева возвращает суффикс из имени файла
+			fl[file.Name()] = TargetFile{ // Заполняем карту файлами с расширением *.go
+				Name: file.Name(), // Дублируется название файла и в ключе и в значении, расходуется память
+				Path: file.Path(), // Но вполне может быть, что это чем-то обосновано
 			}
 		}
 	}
@@ -96,45 +134,49 @@ func FindFiles(ctx context.Context, ext string) (FileList, error) {
 }
 
 func main() {
-	const searchDepth = 2 //Ограничить глубину поиска заданым числом
 	const wantExt = ".go"
 	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
-	select {
-	case sig := <-sigCh: // TODO: проверить прохождение сигнала syscall.SIGUSR1 или syscall.SIGUSR2
-		depth := searchDepth + 2                                             // TODO: новая глубина поиска, передать в ListDirectory
-		fmt.Printf("\ninput os signal: %s\ndepth searches %d\n", sig, depth) // Удалить после отладки !!!
-	}
-	//Обработать сигнал SIGUSR1
-	waitCh := make(chan struct{})
-
-	//osSignalChan := make(chan os.Signal) // Обработать сигнал SIGUSR1
-	//signal.Notify(osSignalChan,
-	//	syscall.SIGINT,
-	//	syscall.SIGTERM)
-	//sig := <-osSignalChan
-	//log.Printf("got signal %q", sig.String())
-
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // Этот контекст завершится сам через 30 секунд
+	defer cancel()                                          // Отложенное принудительное завершение контекста
+	sigCh := make(chan os.Signal, 1)                        // Канал для приема системных сигналов ОС
+	waitCh := make(chan struct{})                           // Канал для приема структур
+	data := SearchData{depth: 2, waitCh: &waitCh}           // Создали структуру data тип SearchData для передачи данных в функции, но определили только 2 поля
+	// Объявили список принимаемых каналом sigCh системных каналов:
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2, syscall.SIGHUP)
 	go func() {
-		res, err := FindFiles(ctx, wantExt)
+		defer close(waitCh)                        // Отложенное принудительное завершение канала, почему в этой горутине закрываем канал, а не в main, где он был создан???
+		res, err := FindFiles(ctx, wantExt, &data) // В переменную res записываем файлы с расширением ".go"
+		//fmt.Printf("Type res %T\n ", res)		   // type of var res - FileList (map[string]TargetFile и type TargetFile struct {Path string, Name string})
 		if err != nil {
 			log.Printf("Error on search: %v\n", err)
 			os.Exit(1)
 		}
 		for _, f := range res {
-			fmt.Printf("\tName: %s\t\t Path: %s\n", f.Name, f.Path)
+			fmt.Printf("\tName: %s\t\t Path: %s\n", f.Name, f.Path) // Печать каждого файла с расширением ".go" и его абсолютный путь
 		}
-		waitCh <- struct{}{}
+		//waitCh <- struct{}{} // зачем перенесли в функцию ListDirectory???
 	}()
 	go func() {
-		<-sigCh
-		log.Println("Signal received, terminate...")
-		cancel()
+		signalType := <-sigCh // При создании канал находится в постоянном ожидании приема системных сигналов?
+		data.Lock()
+		data.lastSignalType = signalType // безопасная запись в структуру, потому что другая горутина тоже пишет в структуру data, но в другие поля
+		data.Unlock()
+
+		switch signalType { // Обработка принятых системных сигналов. Как сгенерировать пользовательский сигнал SIGUSR1 и SIGUSR2 ? Я не нашел информацию
+		case syscall.SIGUSR1:
+			log.Println("INPUT SIGUSR1: display current directory and current search depth") // Обработать сигнал SIGUSR1
+		case syscall.SIGUSR2:
+			log.Println("INPUT SIGUSR2: search depth will be increased (+2)") // Обработать сигнал SIGUSR2
+		default:
+			log.Println("Signal received, terminate...") // Текстовая информация та, которая соответствует всем каналам кроме SIGUSR1 и SIGUSR2 ? Или нужно изменить?
+			cancel()
+		}
 	}()
+
 	//Дополнительно: Ожидание всех горутин перед завершением
-	<-waitCh
+	for range waitCh {
+		<-waitCh // Прочитали из всех каналов и они закрылись
+	}
+	cancel() // Закрыть контекст, если не было приято ни одного системного сигнала за время существования контекста?
 	log.Println("Done")
 }
