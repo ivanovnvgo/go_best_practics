@@ -1,6 +1,5 @@
 // Домашнее задание №2 к уроку Go лучшие практики
 // Логирование
-// Здесь недоделанное домашнее задание к уроку №1, напишу к нему логи, потом снова вернусь к обработке сигналов в hw1.go
 package main
 
 //Исходники задания для первого занятия у других групп https://github.com/t0pep0/GB_best_go1
@@ -13,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -38,6 +38,14 @@ func (fi fileInfo) Path() string {
 	return fi.path
 }
 
+type SearchData struct {
+	sync.Mutex
+	depth          int
+	current        int
+	lastSignalType os.Signal
+	waitCh         *chan struct{}
+}
+
 type FileSearcher struct {
 	logger *zap.Logger
 }
@@ -48,15 +56,27 @@ func NewFileSearcher(logger *zap.Logger) *FileSearcher {
 	}
 }
 
-func (f *FileSearcher) listDirectory(ctx context.Context, dir string) ([]FileInfo, error) {
-	// Ограничить глубину поиска заданым числом, по SIGUSR2 увеличить глубину поиска на +2
+func (f *FileSearcher) listDirectory(ctx context.Context, dir string, data *SearchData) ([]FileInfo, error) {
+	// Ограничить глубину поиска заданным числом, по SIGUSR2 увеличить глубину поиска на +2
+	*data.waitCh <- struct{}{}
 	select {
 	case <-ctx.Done():
 		f.logger.Info("context is done, skipping dir", zap.String("dir", dir))
 		return nil, nil
 	default:
 		//По SIGUSR1 вывести текущую директорию и текущую глубину поиска
+		//По SIGUSR2 увеличить глубину поиска на +2
 		time.Sleep(time.Second * 10) // Добавить общий таймаут на работу парсера
+		switch data.lastSignalType {
+		case syscall.SIGUSR1:
+			fmt.Printf("\nDirectory: %s, Depth: %d", dir, data.depth)
+			f.logger.Info("input syscall.SIGUSR1")
+		case syscall.SIGUSR2:
+			data.Lock()
+			data.depth += 2
+			data.Unlock()
+			f.logger.Info("input syscall.SIGUSR2")
+		}
 		var result []FileInfo
 		res, err := os.ReadDir(dir)
 		if err != nil {
@@ -65,17 +85,26 @@ func (f *FileSearcher) listDirectory(ctx context.Context, dir string) ([]FileInf
 			return nil, err
 		}
 		for _, entry := range res {
+			data.current = 0
 			path := filepath.Join(dir, entry.Name())
 			if entry.IsDir() {
-				child, err := f.listDirectory(ctx, path) //Дополнительно: вынести в горутину
-				if err != nil {
-					return result, err
+				fmt.Println(data.current, data.depth, path)
+				if data.current < data.depth {
+					data.current++
+					child, err := f.listDirectory(ctx, path, data) //Дополнительно: вынести в горутину
+					if err != nil {
+						f.logger.Error("error reading subdirectory", zap.Error(err),
+							zap.String("path", path))
+						return nil, err
+					}
+					result = append(result, child...)
 				}
-				result = append(result, child...)
 			} else {
 				info, err := entry.Info()
 				if err != nil {
-					return result, err
+					f.logger.Error("error reading file.Info", zap.Error(err),
+						zap.String("path", path))
+					return nil, err
 				}
 				result = append(result, fileInfo{info, path})
 			}
@@ -84,13 +113,13 @@ func (f *FileSearcher) listDirectory(ctx context.Context, dir string) ([]FileInf
 	}
 }
 
-func (f *FileSearcher) FindFiles(ctx context.Context, ext string) (FileList, error) {
+func (f *FileSearcher) FindFiles(ctx context.Context, ext string, data *SearchData) (FileList, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		f.logger.Error("Could not get work directory", zap.Error(err))
 		return nil, err
 	}
-	files, err := f.listDirectory(ctx, wd)
+	files, err := f.listDirectory(ctx, wd, data)
 	if err != nil {
 		f.logger.Error("Error not on get file list", zap.Error(err))
 		if len(files) == 0 {
@@ -120,8 +149,6 @@ var (
 )
 
 func main() {
-	const searchDepth = 2 //Ограничить глубину поиска заданным числом
-
 	const (
 		wantExt = ".go"
 		//		development = "DEVELOPMENT"
@@ -151,24 +178,18 @@ func main() {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
-	select {
-	case sig := <-sigCh: // TODO: проверить прохождение сигнала syscall.SIGUSR1 или syscall.SIGUSR2
-		depth := searchDepth + 2                                             // TODO: новая глубина поиска, передать в ListDirectory
-		fmt.Printf("\ninput os signal: %s\ndepth searches %d\n", sig, depth) // Удалить после отладки !!!
-	}
-	//Обработать сигнал SIGUSR1
 	waitCh := make(chan struct{})
-	fileSearcher := NewFileSearcher(logger)
-	//osSignalChan := make(chan os.Signal) // Обработать сигнал SIGUSR1
-	//signal.Notify(osSignalChan,
-	//	syscall.SIGINT,
-	//	syscall.SIGTERM)
-	//sig := <-osSignalChan
-	//log.Printf("got signal %q", sig.String())
-
+	data := SearchData{
+		depth:  2,
+		waitCh: &waitCh,
+	}
+	l := NewFileSearcher(logger)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
+	// TODO: Как проверить прохождение сигнала syscall.SIGUSR1 или syscall.SIGUSR2
+	syscall.Kill(syscall.Getpid(), syscall.SIGUSR1) // Пробую передать системный сигнал
 	go func() {
-		res, err := fileSearcher.FindFiles(ctx, wantExt)
+		defer close(waitCh)
+		res, err := l.FindFiles(ctx, wantExt, &data)
 		if err != nil {
 			logger.Error("Error on search", zap.Error(err))
 			//log.Printf("Error on search: %v\n", err)
@@ -177,13 +198,27 @@ func main() {
 		for _, f := range res {
 			fmt.Printf("\tName: %s\t\t Path: %s\n", f.Name, f.Path)
 		}
-		waitCh <- struct{}{}
 	}()
+
 	go func() {
 		<-sigCh
 		logger.Info("Signal received, terminate...")
 		// log.Println("Signal received, terminate...")
 		cancel()
+		signalType := <-sigCh // При создании канал находится в постоянном ожидании приема системных сигналов?
+		data.Lock()
+		data.lastSignalType = signalType // безопасная запись в структуру, потому что другая горутина тоже пишет в структуру data, но в другие поля
+		data.Unlock()
+
+		switch signalType { // Обработка принятых системных сигналов. Как сгенерировать пользовательский сигнал SIGUSR1 и SIGUSR2 ? Я не нашел информацию
+		case syscall.SIGUSR1:
+			log.Println("INPUT SIGUSR1: display current directory and current search depth") // Обработать сигнал SIGUSR1
+		case syscall.SIGUSR2:
+			log.Println("INPUT SIGUSR2: search depth will be increased (+2)") // Обработать сигнал SIGUSR2
+		default:
+			log.Println("Signal received, terminate...") // Текстовая информация та, которая соответствует всем каналам кроме SIGUSR1 и SIGUSR2 ? Или нужно изменить?
+			cancel()
+		}
 	}()
 	//Дополнительно: Ожидание всех горутин перед завершением
 	<-waitCh
