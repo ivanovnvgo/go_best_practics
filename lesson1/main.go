@@ -35,7 +35,7 @@ func (fi fileInfo) Path() string {
 	return fi.path
 }
 
-type DataInput struct { // Добавлен тип SearchData структура
+type DataInput struct { // Добавлен тип DataInput структура
 	signalOs os.Signal
 	ch       *chan struct{}
 }
@@ -104,6 +104,9 @@ func ListDirectory(ctx context.Context, dir string, depthChildDir int, dataInput
 	}
 }
 
+// FindFiles - - рекурсивная функция, принимает контекст, расширение файла, глубину поиска и структуру,
+//возвращает список файлов, соответствующих принятому расширению, и ошибку
+
 func FindFiles(ctx context.Context, ext string, depth int, dataInput *DataInput) (FileList, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -163,7 +166,8 @@ func main() {
 	go func() {
 		defer wg.Done()
 		signalType := <-sigCh // При создании канал находится в постоянном ожидании приема системных сигналов?
-		switch signalType {   // Обработка принятых системных сигналов. Как сгенерировать пользовательский сигнал SIGUSR1 и SIGUSR2 ? Я не нашел информацию
+		switch signalType {   // Обработка принятых системных сигналов.
+		// Как сгенерировать пользовательский сигнал SIGUSR1 и SIGUSR2 ? Я не нашел информацию
 		case syscall.SIGUSR1:
 			log.Println("INPUT SIGUSR1: display current directory and current search depth") // Обработать сигнал SIGUSR1
 		case syscall.SIGUSR2:
