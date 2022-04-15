@@ -1,0 +1,12 @@
+# перенести в ~/go_best_practics/.github/workflows/
+name: `test_and_check`
+
+on:
+  push:
+    branches:
+jobs:
+  test:
+    name:
+    runs-on: ubuntu-latest
+    steps:
+  check:
