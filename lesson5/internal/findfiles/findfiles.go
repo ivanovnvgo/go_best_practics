@@ -1,15 +1,11 @@
-package main
-
-//Исходники задания для первого занятия у других групп https://github.com/t0pep0/GB_best_go
+package findfiles
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
-	"os/signal"
+	"path"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -35,9 +31,9 @@ func (fi fileInfo) Path() string {
 	return fi.path
 }
 
-type DataInput struct { // Добавлен тип SearchData структура
+type DataInput struct { // Добавлен тип DataInput структура
 	signalOs os.Signal
-	ch       *chan struct{}
+	Ch       *chan struct{}
 }
 
 // ListDirectory - рекурсивная функция, принимает контекст и текущую директорию,
@@ -56,7 +52,7 @@ func ListDirectory(ctx context.Context, dir string, depthChildDir int, dataInput
 		return nil, nil
 	default:
 		//По SIGUSR1 вывести текущую директорию и текущую глубину поиска
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 5)
 		switch dataInput.signalOs { // Проверка принятого системного сигнала
 		//По SIGUSR1 вывести текущую директорию и текущую глубину поиска
 		case syscall.SIGUSR1:
@@ -104,12 +100,16 @@ func ListDirectory(ctx context.Context, dir string, depthChildDir int, dataInput
 	}
 }
 
+// FindFiles - - рекурсивная функция, принимает контекст, расширение файла, глубину поиска и структуру,
+//возвращает список файлов (map), соответствующих принятому расширению, и ошибку
+
 func FindFiles(ctx context.Context, ext string, depth int, dataInput *DataInput) (FileList, error) {
-	wd, err := os.Getwd()
+	wd, err := os.Getwd() // получили текущую директорию wd
 	if err != nil {
 		return nil, err
 	}
-	files, err := ListDirectory(ctx, wd, depth, dataInput)
+	newWd := path.Dir(wd) // получили директорию на 1 уровень ниже текущей wd
+	files, err := ListDirectory(ctx, newWd, depth, dataInput)
 	if err != nil {
 		return nil, err
 	}
@@ -123,59 +123,4 @@ func FindFiles(ctx context.Context, ext string, depth int, dataInput *DataInput)
 		}
 	}
 	return fl, nil
-}
-
-func main() {
-	const wantExt = ".go"
-
-	var nestingDepth int = 2 // задаем глубину вложенности при поиске нужных файлов, максимальная 4
-
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	defer close(sigCh)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
-
-	//Обработать сигнал SIGUSR1
-	waitCh := make(chan struct{})
-	// Создаем структуру data тип SearchData для передачи данных в функции, но определили только 2 поля
-	dataInput := DataInput{ch: &waitCh}
-
-	go func() {
-		defer wg.Done()
-		res, err := FindFiles(ctx, wantExt, nestingDepth, &dataInput)
-		if err != nil {
-			log.Printf("Error on search: %v\n", err)
-			os.Exit(1)
-		}
-		for _, f := range res {
-			fmt.Printf("\tName: %s\t\t Path: %s\n", f.Name, f.Path)
-		}
-		waitCh <- struct{}{}
-	}()
-
-	go func() {
-		defer wg.Done()
-		signalType := <-sigCh // При создании канал находится в постоянном ожидании приема системных сигналов?
-		switch signalType {   // Обработка принятых системных сигналов. Как сгенерировать пользовательский сигнал SIGUSR1 и SIGUSR2 ? Я не нашел информацию
-		case syscall.SIGUSR1:
-			log.Println("INPUT SIGUSR1: display current directory and current search depth") // Обработать сигнал SIGUSR1
-		case syscall.SIGUSR2:
-			log.Println("INPUT SIGUSR2: search depth will be increased (+2)") // Обработать сигнал SIGUSR2
-		default:
-			log.Println("Signal received, terminate...") // Текстовая информация та, которая соответствует всем каналам кроме SIGUSR1 и SIGUSR2
-		}
-		cancel()
-	}()
-
-	//Дополнительно: Ожидание всех горутин перед завершением
-	<-waitCh
-	wg.Wait()
-	log.Println("Done")
 }
