@@ -105,7 +105,7 @@ func ListDirectory(ctx context.Context, dir string, depthChildDir int, dataInput
 }
 
 // FindFiles - - рекурсивная функция, принимает контекст, расширение файла, глубину поиска и структуру,
-//возвращает список файлов, соответствующих принятому расширению, и ошибку
+//возвращает список файлов (map), соответствующих принятому расширению, и ошибку
 
 func FindFiles(ctx context.Context, ext string, depth int, dataInput *DataInput) (FileList, error) {
 	wd, err := os.Getwd()
@@ -131,7 +131,7 @@ func FindFiles(ctx context.Context, ext string, depth int, dataInput *DataInput)
 func main() {
 	const wantExt = ".go"
 
-	var nestingDepth int = 2 // задаем глубину вложенности при поиске нужных файлов, максимальная 4
+	var nestingDepth int = 2 // задаем глубину вложенности при поиске нужных файлов, максимальное значение 4
 
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -147,7 +147,8 @@ func main() {
 
 	//Обработать сигнал SIGUSR1
 	waitCh := make(chan struct{})
-	// Создаем структуру data тип SearchData для передачи данных в функции, но определили только 2 поля
+
+	// Создаем структуру dataInput тип SearchData для передачи данных в различные функции
 	dataInput := DataInput{ch: &waitCh}
 
 	go func() {
