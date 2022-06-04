@@ -1,0 +1,89 @@
+# Для запуска ввести в директории проекта команду:
+# golangci-lint run -c <имя-файла-конфига>
+# golangci-lint run -c golangci-lint.yaml
+
+run:
+  concurrency: 2
+  timeout: 2m
+  issues-exit-code: 2
+  tests: false
+  # build-tags: (default: [])
+  skip-dirs:
+    - subdir3.1/
+  # skip-dirs-use-default: (default: true)
+  # skip-files: (default value is empty list)
+  # modules-download-mode: (default: it isn't set)
+  # allow-parallel-runners: (default: false)
+  go: '1.17'
+
+linters-settings:
+  goconst: #
+    min-len: 2
+    min-occurrences: 3
+  gocritic: #
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport # https://github.com/go-critic/go-critic/issues/845
+      - ifElseChain
+      - octalLiteral
+      - whyNoLint
+      - wrapperFunc
+  gocyclo: #
+    min-complexity: 15
+  goimports: #
+    local-prefixes: github.com/ivanovnvgo/go_best_practics/lesson3
+  govet: #
+    check-shadowing: true
+    settings:
+      printf:
+        funcs:
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+
+linters:
+  disable-all: true
+  enable:
+    - bodyclose #
+    - deadcode # говорит нам, если не используется тип
+  #  - depguard
+  #  - dogsled
+  #  - dupl
+    - errcheck # находит места где мы забыли проверку ошибок
+  #  - exportloopref
+  #  - funlen
+  #  - gochecknoinits
+    - goconst # проверяет, что в коде нет повторяющихся строковых литералов, которые можно было бы вынести в константы. Количество этих повторов настраиваются.
+    - gocritic # сообщает о копировании тяжелых структур данных вместо передачи по указателю
+    - gocyclo # проверяет цикломатическую сложность кода и ругается когда сложность функции превысит порог. Порог настраивается.
+    - gofmt #
+    - goimports #
+  #  - gomnd
+  #  - goprintffuncname
+  #  - gosec
+    - gosimple # специализируется на упрощении кода
+    - govet # находит в основном баги
+    - ineffassign # сообщает, когда изменение переменой не используются дальше в коде
+  #  - lll
+  #  - malignet # у него есть опция позволяющая распечатать вам сразу нужный порядок полей, чтобы самому не подбирать их
+  #  - misspell
+  #  - nakedret
+  #  - noctx
+  #  - nolintlint
+    - staticcheck # находит тонны различных багов
+    - structcheck
+    - stylecheck
+    - typecheck
+    - unconvert # проверяет что вы не делайте лишние конверсии
+  #  - unindent # умеет понижать уровень вложенности кода
+    - unparam # сообщает когда аргументы функции не используются в самом теле функции
+    - unused # умеет "ругаться" на неиспользуемые поля структур
+    - varcheck # находит неиспользуемые глобальные переменные и константы
+  #  - whitespace
+
